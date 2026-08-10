@@ -15,7 +15,7 @@ jobs:
     
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         
       - name: Setup Linux Environment
         env:
@@ -109,7 +109,7 @@ jobs:
           make -j$(nproc)
           
       - name: Upload Artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: H1Radio_TI04-708HP_SuperFirmware
           path: openwrt/bin/targets/ipq40xx/generic/*sysupgrade.bin
