@@ -56,26 +56,6 @@ jobs:
           TARGET_DEVICES += h1radio_ti04-708hp
           EOF
           
-      - name: Inject 2.3GHz Kernel Patch (cfg80211/ath10k)
-        run: |
-          cd openwrt
-          mkdir -p package/kernel/mac80211/patches/build
-          
-          # 1. Patch reg.c to allow 2.3 GHz in cfg80211
-          cat << 'EOF' > package/kernel/mac80211/patches/build/999-unlock-2.3ghz.patch
-          --- a/net/wireless/reg.c
-          +++ b/net/wireless/reg.c
-          @@ -2994,7 +2994,7 @@ bool regulatory_is_valid_freq(struct wiphy *wiphy, enum nl80211_band band,
-           		if (freq == wiphy->bands[band]->channels[i].center_freq)
-           			return true;
-           	}
-          -	return false;
-          +	return true;
-           }
-           EXPORT_SYMBOL(regulatory_is_valid_freq);
-           
-          EOF
-          
       - name: Inject Custom Board Data and Regulatory
         run: |
           cd openwrt
@@ -94,6 +74,8 @@ jobs:
           CONFIG_TARGET_ipq40xx_generic=y
           CONFIG_TARGET_ipq40xx_generic_DEVICE_h1radio_ti04-708hp=y
           CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_irqbalance=y
+          CONFIG_PACKAGE_luci-app-irqbalance=y
           EOF
           
           make defconfig
