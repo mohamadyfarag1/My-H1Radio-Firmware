@@ -94,4 +94,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: H1Radio_TI04-708HP_SuperFirmware
-          path: openwrt/bin/targets/ipq40xx/generic/*sysupgrade.bin
+          path: openwrt/bin/targets/ipq40xx/generic/*
