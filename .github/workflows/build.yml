@@ -1,0 +1,169 @@
+name: Build Custom OpenWrt for H1Radio TI04-708HP
+
+on:
+  workflow_dispatch:
+    inputs:
+      packages:
+        description: 'Extra packages to install (e.g., luci luci-app-wireguard)'
+        required: false
+        default: 'luci'
+
+jobs:
+  build:
+    name: Build OpenWrt
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Linux Environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib g++-multilib \
+            gettext git libncurses5-dev libssl-dev python3-distutils python3-setuptools rsync unzip zlib1g-dev \
+            file wget device-tree-compiler python3-pip
+          pip3 install m2crypto
+
+      - name: Clone OpenWrt Source
+        run: |
+          git clone https://git.openwrt.org/openwrt/openwrt.git openwrt
+
+      - name: Decompile and Inject Device Tree
+        run: |
+          cd openwrt
+          mkdir -p target/linux/ipq40xx/files/arch/arm/boot/dts
+          dtc -I dtb -O dts ../router.dtb > target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-h1radio-ti04-708hp.dts
+
+      - name: Patch Makefiles for Custom Device
+        run: |
+          cd openwrt
+          {
+            printf '\n'
+            printf 'define Device/h1radio_ti04-708hp\n'
+            printf '\t$(call Device/FitImage)\n'
+            printf '\tDEVICE_VENDOR := H1Radio\n'
+            printf '\tDEVICE_MODEL := TI04-708HP\n'
+            printf '\tSOC := qcom-ipq4019\n'
+            printf '\tDEVICE_DTS := qcom-ipq4019-h1radio-ti04-708hp\n'
+            printf '\tBLOCKSIZE := 128k\n'
+            printf '\tPAGESIZE := 2048\n'
+            printf '\tIMAGE_SIZE := 32768k\n'
+            printf '\tDEVICE_PACKAGES := kmod-ath10k-ct ath10k-firmware-qca4019-ct\n'
+            printf 'endef\n'
+            printf 'TARGET_DEVICES += h1radio_ti04-708hp\n'
+          } >> target/linux/ipq40xx/image/generic.mk
+
+      - name: Create Superchannel Unlock Script
+        run: |
+          cat > /tmp/unlock-superchannel.sh << 'SEDSCRIPT'
+          #!/bin/bash
+          echo "=== Superchannel Unlock Script ==="
+
+          for REGD in $(find . -path "*/drivers/net/wireless/ath/regd.c" 2>/dev/null); do
+            echo "Patching: $REGD"
+            sed -i 's/REG_RULE(2412-10, 2462+10, 40, 0, 20, 0)/REG_RULE(2182-10, 2732+10, 40, 0, 30, 0)/g' "$REGD"
+            sed -i 's/REG_RULE(2467-10, 2472+10, 40, 0, 20,/REG_RULE(2182-10, 2732+10, 40, 0, 30,/g' "$REGD"
+            sed -i 's/REG_RULE(2484-10, 2484+10, 40, 0, 20,/REG_RULE(2484-10, 2484+10, 40, 0, 30,/g' "$REGD"
+            sed -i 's/REG_RULE(5150-10, 5350+10, 80, 0, 30,/REG_RULE(4900-10, 6100+10, 160, 0, 30,/g' "$REGD"
+            sed -i 's/REG_RULE(5470-10, 5850+10, 80, 0, 30,/REG_RULE(4900-10, 6100+10, 160, 0, 30,/g' "$REGD"
+            sed -i 's/REG_RULE(5725-10, 5850+10, 80, 0, 30,/REG_RULE(4900-10, 6100+10, 160, 0, 30,/g' "$REGD"
+            sed -i 's/NL80211_RRF_NO_IR/0/g' "$REGD"
+            sed -i 's/NL80211_RRF_NO_OFDM/0/g' "$REGD"
+            echo "  -> ath/regd.c patched OK"
+          done
+
+          for REG in $(find . -path "*/net/wireless/reg.c" 2>/dev/null); do
+            echo "Patching: $REG"
+            sed -i 's/REG_RULE(2412-10, 2462+10, 40, 6, 20, 0)/REG_RULE(2182-10, 2732+10, 40, 6, 30, 0)/g' "$REG"
+            sed -i 's/REG_RULE(2467-10, 2472+10, 20, 6, 20,/REG_RULE(2182-10, 2732+10, 40, 6, 30,/g' "$REG"
+            sed -i 's/REG_RULE(2484-10, 2484+10, 20, 6, 20,/REG_RULE(2484-10, 2484+10, 40, 6, 30,/g' "$REG"
+            sed -i 's/if (!is_valid_rd(rd)) {/if (0) {/g' "$REG"
+            sed -i 's/if (WARN(!is_valid_rd(rd)/if (WARN(0/g' "$REG"
+            echo "  -> net/wireless/reg.c patched OK"
+          done
+
+          echo "=== Superchannel Unlock Complete ==="
+          SEDSCRIPT
+          chmod +x /tmp/unlock-superchannel.sh
+
+      - name: Generate Custom Unlocked Regulatory DB
+        run: |
+          git clone https://git.kernel.org/pub/scm/linux/kernel/git/sforshee/wireless-regdb.git
+          cd wireless-regdb
+          {
+            printf 'country 00:\n'
+            printf '\t(2300 - 2736 @ 40), (30)\n'
+            printf '\t(5150 - 5925 @ 160), (30)\n'
+            printf '\n'
+            printf 'country US: DFS-FCC\n'
+            printf '\t(2300 - 2736 @ 40), (30)\n'
+            printf '\t(5150 - 5925 @ 160), (30)\n'
+          } > db.txt
+          openssl ecparam -name prime256v1 -genkey -noout -out key.priv.pem
+          make
+
+      - name: Inject Custom Board Data and Regulatory and UCI Defaults
+        run: |
+          cd openwrt
+          mkdir -p files/lib/firmware/ath10k/QCA4019/hw1.0/
+          cp ../board-2.bin files/lib/firmware/ath10k/QCA4019/hw1.0/board-2.bin
+          cp ../wireless-regdb/regulatory.db files/lib/firmware/regulatory.db
+          cp -r ../files_ap/* files/
+          chmod +x files/etc/uci-defaults/*
+
+      - name: Update Feeds and Configure
+        run: |
+          cd openwrt
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          cat > .config << 'CFGEOF'
+          CONFIG_TARGET_ipq40xx=y
+          CONFIG_TARGET_ipq40xx_generic=y
+          CONFIG_TARGET_ipq40xx_generic_DEVICE_h1radio_ti04-708hp=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_irqbalance=y
+          CONFIG_PACKAGE_luci-app-irqbalance=y
+          CONFIG_PACKAGE_kmod-ath=y
+          CONFIG_ATH_USER_REGD=y
+          CONFIG_PACKAGE_ATH_USER_REGD=y
+          CONFIG_PACKAGE_kmod-mac80211=y
+          CONFIG_MAC80211_USER_REGD=y
+          CONFIG_KERNEL_CFG80211_REQUIRE_SIGNED_REGDB=n
+          CONFIG_KERNEL_CFG80211_CERTIFICATION_ONUS=y
+          CONFIG_PACKAGE_wireless-regdb=y
+          CFGEOF
+          make defconfig
+
+      - name: Download Dependencies
+        run: |
+          cd openwrt
+          make download -j8
+
+      - name: Compile Firmware with Superchannel Patches
+        run: |
+          cd openwrt
+          echo "======================================="
+          echo "Step 1: Preparing kernel source..."
+          echo "======================================="
+          make target/linux/prepare V=s -j$(nproc) 2>&1 || true
+
+          echo "======================================="
+          echo "Step 2: Applying Superchannel Patches..."
+          echo "======================================="
+          cd build_dir
+          bash /tmp/unlock-superchannel.sh
+          cd ..
+
+          echo "======================================="
+          echo "Step 3: Starting Full Compilation..."
+          echo "======================================="
+          make -j$(nproc) || make -j1 V=s
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: H1Radio_TI04-708HP_SuperFirmware
+          path: openwrt/bin/targets/ipq40xx/generic/*
