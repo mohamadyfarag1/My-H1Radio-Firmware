@@ -216,6 +216,35 @@ jobs:
           cp -r ../files_ap/* files/
           chmod +x files/etc/uci-defaults/*
 
+          # Create helper script to extract real EEPROM calibration data after first boot
+          mkdir -p files/usr/sbin
+          cat > files/usr/sbin/extract-board-data << 'EXTRACTEOF'
+          #!/bin/sh
+          # Run this script via SSH after first boot to extract
+          # the real calibration data from your device's flash
+          echo "=== H1Radio Board Data Extractor ==="
+
+          # Find the ART (calibration) partition
+          ART_MTD=$(grep -i "art\|caldata\|radio\|0:ART" /proc/mtd | head -1 | cut -d: -f1)
+          if [ -z "$ART_MTD" ]; then
+            echo "ERROR: Could not find calibration partition!"
+            echo "Available partitions:"
+            cat /proc/mtd
+            exit 1
+          fi
+
+          echo "Found calibration partition: /dev/$ART_MTD"
+          dd if=/dev/$ART_MTD of=/tmp/art_backup.bin 2>/dev/null
+          echo "Calibration data saved to /tmp/art_backup.bin"
+          echo "Size: $(wc -c < /tmp/art_backup.bin) bytes"
+          echo ""
+          echo "To download it to your PC, use:"
+          echo "  scp root@192.168.1.1:/tmp/art_backup.bin ."
+          echo ""
+          echo "=== Done ==="
+          EXTRACTEOF
+          chmod +x files/usr/sbin/extract-board-data
+
       - name: Update Feeds and Configure
         run: |
           cd openwrt
