@@ -33,8 +33,19 @@ jobs:
       - name: Decompile and Inject Device Tree
         run: |
           cd openwrt
+          # Decompile router.dtb to DTS source
+          dtc -I dtb -O dts -s ../router.dtb > /tmp/h1radio.dts
+
+          # Place DTS in ALL possible locations OpenWrt may look for it
+          # Location 1: files overlay (for custom devices)
           mkdir -p target/linux/ipq40xx/files/arch/arm/boot/dts
-          dtc -I dtb -O dts ../router.dtb > target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-h1radio-ti04-708hp.dts
+          cp /tmp/h1radio.dts target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-h1radio-ti04-708hp.dts
+
+          # Location 2: The main DTS directory used by ipq40xx target
+          mkdir -p target/linux/ipq40xx/dts
+          cp /tmp/h1radio.dts target/linux/ipq40xx/dts/qcom-ipq4019-h1radio-ti04-708hp.dts
+
+          echo "DTS injected into all locations"
 
       - name: Patch Makefiles for Custom Device
         run: |
@@ -280,6 +291,20 @@ jobs:
           echo "Step 1: Preparing kernel source..."
           echo "======================================="
           make target/linux/prepare V=s -j$(nproc) 2>&1 || true
+
+          echo "======================================="
+          echo "Step 1.5: Injecting DTS into kernel build tree..."
+          echo "======================================="
+          # Find the actual kernel build directory and inject DTS there
+          for dts_dir in $(find build_dir -type d -name "dts" -path "*/arch/arm/boot/dts" 2>/dev/null); do
+            echo "Copying DTS to: $dts_dir"
+            cp /tmp/h1radio.dts "$dts_dir/qcom-ipq4019-h1radio-ti04-708hp.dts"
+          done
+          # Also search for any qcom dts directory
+          for dts_dir in $(find build_dir -type d -name "dts" -path "*/boot/dts" 2>/dev/null); do
+            echo "Copying DTS to: $dts_dir"
+            cp /tmp/h1radio.dts "$dts_dir/qcom-ipq4019-h1radio-ti04-708hp.dts" 2>/dev/null || true
+          done
 
           echo "======================================="
           echo "Step 2: Applying Superchannel Patches..."
