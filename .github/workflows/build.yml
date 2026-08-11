@@ -54,6 +54,7 @@ jobs:
             printf '\n'
             printf 'define Device/h1radio_ti04-708hp\n'
             printf '\t$(call Device/FitImage)\n'
+            printf '\t$(call Device/UbiFit)\n'
             printf '\tDEVICE_VENDOR := H1Radio\n'
             printf '\tDEVICE_MODEL := TI04-708HP\n'
             printf '\tSOC := qcom-ipq4019\n'
@@ -65,6 +66,15 @@ jobs:
             printf 'endef\n'
             printf 'TARGET_DEVICES += h1radio_ti04-708hp\n'
           } >> target/linux/ipq40xx/image/generic.mk
+
+      - name: Patch platform.sh for sysupgrade support
+        run: |
+          cd openwrt
+          PLATFORM_SH="target/linux/ipq40xx/base-files/lib/upgrade/platform.sh"
+          # Add our device to the nand_do_upgrade list in platform_do_upgrade()
+          sed -i '/wallys,dr40x9)/a\	h1radio,ti04-708hp |\\' "$PLATFORM_SH"
+          echo "=== platform.sh patched: h1radio added to nand_do_upgrade ==="
+          grep -A 2 'h1radio' "$PLATFORM_SH" || true
 
       - name: Create Superchannel Unlock Script
         run: |
@@ -227,6 +237,88 @@ jobs:
           cp -r ../files_ap/* files/
           chmod +x files/etc/uci-defaults/*
 
+          # ============================================
+          # Passive ARP Sniffer (UBNT-like IP+Host discovery)
+          # ============================================
+          mkdir -p files/usr/bin
+          cat > files/usr/bin/passive-ip-sniffer.sh << 'SNIFFEREOF'
+#!/bin/sh
+# Passive ARP Sniffer - Discovers IP and Hostname of wireless stations
+# Works on Bridge Mode APs with DHCP disabled
+# Mimics UBNT-style station info discovery
+
+LEASES="/tmp/dhcp.leases"
+CACHE="/tmp/.arp-sniffer-cache"
+
+sleep 15
+touch "$CACHE" "$LEASES"
+
+tcpdump -i br-lan -l -n -e -t arp 2>/dev/null | awk '
+{
+    mac = ""; ip = ""
+    if ($9 == "Request" && $12 == "tell") {
+        mac = $1; ip = $13; sub(/,$/, "", ip)
+    } else if ($9 == "Reply" && $11 == "is-at") {
+        mac = $1; ip = $10
+    }
+    if (mac != "" && ip != "") {
+        print mac " " ip
+        fflush()
+    }
+}' | while read mac ip; do
+    # Skip if already cached
+    grep -q "$mac $ip" "$CACHE" 2>/dev/null && continue
+
+    # Inject IP into kernel neighbor table
+    ip neigh replace "$ip" dev br-lan lladdr "$mac" nud reachable 2>/dev/null
+
+    # Try reverse DNS for hostname
+    hostname=$(nslookup "$ip" 2>/dev/null | sed -n 's/.*name = \(.*\)/\1/p' | sed 's/\.$//' | head -1)
+
+    # If no reverse DNS, try reading HTTP title from device web UI
+    if [ -z "$hostname" ]; then
+        hostname=$(wget -qO- -T 2 "http://$ip/" 2>/dev/null | sed -n 's/.*<title>\([^<]*\)<\/title>.*/\1/ip' | head -1)
+    fi
+
+    # Fallback: use IP as hostname
+    [ -z "$hostname" ] && hostname="$ip"
+
+    # Update cache
+    sed -i "/$mac/d" "$CACHE" 2>/dev/null
+    echo "$mac $ip $hostname" >> "$CACHE"
+
+    # Write to DHCP leases file (LuCI reads this for Host column)
+    sed -i "/$mac/d" "$LEASES" 2>/dev/null
+    echo "0 $mac $ip $hostname *" >> "$LEASES"
+done
+SNIFFEREOF
+          chmod +x files/usr/bin/passive-ip-sniffer.sh
+
+          # Init.d service for auto-start
+          mkdir -p files/etc/init.d
+          cat > files/etc/init.d/passive-arp << 'INITEOF'
+#!/bin/sh /etc/rc.common
+START=99
+USE_PROCD=1
+PROG=/usr/bin/passive-ip-sniffer.sh
+start_service() {
+    procd_open_instance
+    procd_set_param command "$PROG"
+    procd_set_param respawn 3600 5 0
+    procd_close_instance
+}
+INITEOF
+          chmod +x files/etc/init.d/passive-arp
+
+          # Auto-enable the service on first boot
+          mkdir -p files/etc/uci-defaults
+          cat > files/etc/uci-defaults/99-enable-passive-arp << 'UCIEOF'
+#!/bin/sh
+/etc/init.d/passive-arp enable
+exit 0
+UCIEOF
+          chmod +x files/etc/uci-defaults/99-enable-passive-arp
+
           # Create helper script to extract real EEPROM calibration data after first boot
           mkdir -p files/usr/sbin
           cat > files/usr/sbin/extract-board-data << 'EXTRACTEOF'
@@ -276,6 +368,8 @@ jobs:
           CONFIG_KERNEL_CFG80211_REQUIRE_SIGNED_REGDB=n
           CONFIG_KERNEL_CFG80211_CERTIFICATION_ONUS=y
           CONFIG_PACKAGE_wireless-regdb=y
+          CONFIG_PACKAGE_tcpdump-mini=y
+          CONFIG_PACKAGE_ip-full=y
           CFGEOF
           make defconfig
 
