@@ -1,6 +1,9 @@
 name: Build Custom OpenWrt for H1Radio TI04-708HP
 
 on:
+  push:
+    branches:
+      - main
   workflow_dispatch:
     inputs:
       packages:
