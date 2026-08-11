@@ -33,6 +33,7 @@ jobs:
       - name: Decompile and Inject Device Tree
         run: |
           cd openwrt
+          mkdir -p target/linux/ipq40xx/files/arch/arm/boot/dts
           dtc -I dtb -O dts ../router.dtb > target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-h1radio-ti04-708hp.dts
           
       - name: Patch Makefiles for Custom Device
