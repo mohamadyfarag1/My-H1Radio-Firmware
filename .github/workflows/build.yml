@@ -84,7 +84,7 @@ jobs:
             printf '\tBLOCKSIZE := 128k\n'
             printf '\tPAGESIZE := 2048\n'
             printf '\tIMAGE_SIZE := 32768k\n'
-            printf '\tDEVICE_PACKAGES := kmod-ath10k ath10k-firmware-qca4019\n'
+            printf '\tDEVICE_PACKAGES := kmod-ath10k ath10k-firmware-qca4019 -kmod-ath10k-ct -ath10k-firmware-qca4019-ct\n'
             printf 'endef\n'
             printf 'TARGET_DEVICES += h1radio_ti04-708hp\n'
           } >> target/linux/ipq40xx/image/generic.mk
@@ -390,6 +390,11 @@ jobs:
           cd openwrt
           ./scripts/feeds update -a || true
           ./scripts/feeds install -a || true
+          
+          # Fix Package Conflict (kmod-ath10k vs kmod-ath10k-ct)
+          # Replace the default -ct package globally for the ipq40xx target to avoid clashes
+          sed -i 's/kmod-ath10k-ct/kmod-ath10k/g' target/linux/ipq40xx/Makefile
+          sed -i 's/ath10k-firmware-qca4019-ct/ath10k-firmware-qca4019/g' target/linux/ipq40xx/Makefile
           cat > .config << 'CFGEOF'
           CONFIG_TARGET_ipq40xx=y
           CONFIG_TARGET_ipq40xx_generic=y
@@ -398,6 +403,8 @@ jobs:
           CONFIG_PACKAGE_irqbalance=y
           CONFIG_PACKAGE_luci-app-irqbalance=y
           CONFIG_PACKAGE_kmod-ath=y
+          # CONFIG_PACKAGE_kmod-ath10k-ct is not set
+          # CONFIG_PACKAGE_ath10k-firmware-qca4019-ct is not set
           CONFIG_ATH_USER_REGD=y
           CONFIG_PACKAGE_ATH_USER_REGD=y
           CONFIG_PACKAGE_kmod-mac80211=y
