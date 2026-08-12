@@ -271,7 +271,6 @@ jobs:
                   else:
                       f.write(f'country {c}:\n')
                   f.write('\t(2192 - 2732 @ 40), (30)\n')
-                  f.write('\t(2484 - 2484 @ 40), (30)\n')
                   f.write('\t(4900 - 6100 @ 160), (30)\n')
                   f.write('\n')
           print(f'Generated db.txt with {len(countries)} countries')
@@ -427,16 +426,7 @@ jobs:
           echo "======================================="
           echo "Step 1.5: Injecting DTS into kernel build tree..."
           echo "======================================="
-          # Find the actual kernel build directory and inject DTS there
-          for dts_dir in $(find build_dir -type d -name "dts" -path "*/arch/arm/boot/dts" 2>/dev/null); do
-            echo "Copying DTS to: $dts_dir"
-            cp /tmp/h1radio.dts "$dts_dir/qcom-ipq4019-h1radio-ti04-708hp.dts"
-          done
-          # Also search for any qcom dts directory
-          for dts_dir in $(find build_dir -type d -name "dts" -path "*/boot/dts" 2>/dev/null); do
-            echo "Copying DTS to: $dts_dir"
-            cp /tmp/h1radio.dts "$dts_dir/qcom-ipq4019-h1radio-ti04-708hp.dts" 2>/dev/null || true
-          done
+          # DTS injection is now handled cleanly via files/ overlay.
 
           echo "======================================="
           echo "Step 2: Applying Superchannel Patches..."
