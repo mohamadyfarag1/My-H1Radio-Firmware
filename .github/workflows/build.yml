@@ -375,15 +375,35 @@ jobs:
           sleep 15
           touch "$LEASES"
           
-          # 1. ARP Sniffer (Captures IP <-> MAC)
-          tcpdump -i br-lan -l -n -e -t arp 2>/dev/null | awk '
-          /Request who-has/ { ip=$4; mac=$6; gsub(/,/, "", mac); system("echo " ip " > /tmp/arp-ip-" tolower(mac)) }
-          /Reply is-at/ { ip=$3; mac=$5; gsub(/,/, "", mac); system("echo " ip " > /tmp/arp-ip-" tolower(mac)) }
+          # A) Master Sniffer (Captures IP <-> MAC from ARP & ICMP/Ping)
+          # This listens to ARP and any ICMP (like The Dude pings) to learn IPs instantly!
+          tcpdump -i br-lan -l -n -e -t 'arp or icmp' 2>/dev/null | awk '
+          {
+              mac = tolower($1);
+              ip = "";
+              if ($4 == "IPv4" || $5 == "IPv4") {
+                  # ICMP Packet: Extract Source IP
+                  for(i=1; i<=NF; i++) {
+                      if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(>|:)/ || $(i+1) == ">") {
+                          ip = $i; sub(/:$/, "", ip); sub(/\.[0-9]+$/, "", ip); break;
+                      }
+                  }
+              } else {
+                  # ARP Packet: Extract Sender IP
+                  for(i=1; i<=NF; i++) {
+                      if ($i == "tell") { ip = $(i+1); gsub(/,/, "", ip); break; }
+                      if ($i == "Reply") { ip = $(i+1); break; }
+                  }
+              }
+              if (ip ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ && mac ~ /^[0-9a-f]{2}:/) {
+                  system("echo " ip " > /tmp/arp-ip-" mac)
+              }
+          }
           ' &
           
-          # 2. DHCP Sniffer (Captures Hostname <-> MAC)
+          # B) DHCP Sniffer (Captures Hostname <-> MAC)
           tcpdump -i br-lan -l -n -e -v udp port 67 or port 68 2>/dev/null | awk '
-          /^[0-9:.]* ([0-9a-fA-F:]+) >/ { current_mac = tolower($2) }
+          /^[0-9a-fA-F]{2}:/ { current_mac = tolower($1) }
           /Hostname/ && /"/ {
               s = $0; start = index(s, "\""); end = index(substr(s, start+1), "\"")
               if (start > 0 && end > 0 && current_mac != "") {
@@ -393,18 +413,22 @@ jobs:
           }
           ' &
           
-          # 3. Compiler: Merge into dhcp.leases
+          # C) Compiler: Merge into dhcp.leases AND Inject into Kernel ARP
           while true; do
               > "$LEASES".new
               for ipfile in /tmp/arp-ip-*; do
                   [ -f "$ipfile" ] || continue
                   mac="${ipfile##*-}"
                   ip=$(cat "$ipfile")
+                  
+                  # 1. Kernel Injection (The Magic command for LuCI!)
+                  ip neigh replace "$ip" lladdr "$mac" dev br-lan nud reachable 2>/dev/null
+                  
+                  # 2. Hostname Fallback logic
                   host="*"
                   if [ -f "/tmp/dhcp-host-$mac" ]; then
                       host=$(cat "/tmp/dhcp-host-$mac")
                   else
-                      # Fallback for Static IPs: Try fetching HTTP Title once
                       if [ ! -f "/tmp/http-host-$mac" ]; then
                           title=$(wget -qO- -T 2 "http://$ip/" 2>/dev/null | grep -i '<title>' | sed -n 's/.*<title>\(.*\)<\/title>.*/\1/ip' | head -1 | tr -d '\r\n')
                           if [ -n "$title" ]; then
