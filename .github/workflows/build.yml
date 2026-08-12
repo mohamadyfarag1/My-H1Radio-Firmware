@@ -28,7 +28,7 @@ jobs:
 
       - name: Clone OpenWrt Source
         run: |
-          git clone -b openwrt-23.05 https://git.openwrt.org/openwrt/openwrt.git openwrt
+          git clone -b openwrt-24.10 https://git.openwrt.org/openwrt/openwrt.git openwrt
 
       - name: Decompile and Patch Original Device Tree (DTS)
         run: |
@@ -52,6 +52,13 @@ jobs:
               content
           )
           
+          # Change Model Name
+          content = re.sub(
+              r'model\s*=\s*".*";', 
+              r'model = "Horus 9200";', 
+              content
+          )
+          
           with open(path, "w") as f:
               f.write(content)
           PYEOF
@@ -71,14 +78,14 @@ jobs:
             printf 'define Device/h1radio_ti04-708hp\n'
             printf '\t$(call Device/FitImage)\n'
             printf '\t$(call Device/UbiFit)\n'
-            printf '\tDEVICE_VENDOR := H1Radio\n'
-            printf '\tDEVICE_MODEL := TI04-708HP\n'
+            printf '\tDEVICE_VENDOR := Horus\n'
+            printf '\tDEVICE_MODEL := 9200\n'
             printf '\tSOC := qcom-ipq4019\n'
             printf '\tDEVICE_DTS := qcom-ipq4019-h1radio-ti04-708hp\n'
             printf '\tBLOCKSIZE := 128k\n'
             printf '\tPAGESIZE := 2048\n'
             printf '\tIMAGE_SIZE := 32768k\n'
-            printf '\tDEVICE_PACKAGES := kmod-ath10k ath10k-firmware-qca4019 -kmod-ath10k-ct -ath10k-firmware-qca4019-ct\n'
+            printf '\tDEVICE_PACKAGES := kmod-ath10k-ct ath10k-firmware-qca4019-ct -kmod-ath10k -ath10k-firmware-qca4019\n'
             printf 'endef\n'
             printf 'TARGET_DEVICES += h1radio_ti04-708hp\n'
           } >> target/linux/ipq40xx/image/generic.mk
@@ -89,30 +96,65 @@ jobs:
           mkdir -p package/base-files/files/etc/uci-defaults
           cat << 'EOF' > package/base-files/files/etc/uci-defaults/99-custom-network
           #!/bin/sh
-          # Enable WiFi radios
+          # Set hostname and UI theme
+          uci set system.@system[0].hostname='Horus-9200'
+          uci commit system
+          uci set luci.main.mediaurlbase='/luci-static/openwrt2020'
+          uci commit luci
+          
+          # Enable WiFi radios and set SSIDs
           uci -q set wireless.@wifi-device[0].disabled=0
           uci -q set wireless.@wifi-device[1].disabled=0
+          uci -q set wireless.default_radio0.ssid='Horus-2.4'
+          uci -q set wireless.default_radio1.ssid='Horus-5G'
+          
+          # 1. Force 5G to AC and disable disassoc_low_ack
+          uci -q set wireless.radio1.require_mode='ac'
+          uci -q set wireless.default_radio1.disassoc_low_ack='0'
           uci commit wireless
           wifi
           
+          # 2 & 3. Inject bitrates lock into rc.local directly during build
+          cat << 'RCLOCAL' > package/base-files/files/etc/rc.local
+          # Put your custom commands here that should be executed once
+          # the system init finished. By default this file does nothing.
+          
+          # Force 5GHz to high bitrates to prevent slow connections
+          for iface in $(iw dev | grep -B 1 "phy#1" -A 2 | grep Interface | awk '{print $2}'); do
+              iw dev "$iface" set bitrates vht-mcs-5 1:2-9 2:1-9 3:1-9 4:0-9
+          done
+          
+          exit 0
+          RCLOCAL
+          chmod +x package/base-files/files/etc/rc.local
+          
           # Setup DSA bridge dynamically for all available ports
           uci -q delete network.@device[0]
-          ports=""
-          for iface in lan1 lan2 lan3 lan4 eth0 eth1 eth2; do
-              if ip link show "$iface" >/dev/null 2>&1; then
-                  ports="$ports $iface"
-              fi
-          done
           uci set network.br_lan=device
           uci set network.br_lan.name='br-lan'
           uci set network.br_lan.type='bridge'
-          uci set network.br_lan.ports="$ports"
+          for iface in lan1 lan2 lan3 lan4 eth0 eth1 eth2; do
+              if ip link show "$iface" >/dev/null 2>&1; then
+                  uci add_list network.br_lan.ports="$iface"
+              fi
+          done
           
           uci set network.lan=interface
           uci set network.lan.device='br-lan'
           uci set network.lan.proto='static'
-          uci set network.lan.ipaddr='192.168.1.1'
+          uci set network.lan.ipaddr='192.168.100.1'
           uci set network.lan.netmask='255.255.255.0'
+          uci set dhcp.lan.ignore='1'
+          uci set network.lan.ipv6='0'
+          
+          # Disable IPv6 on the bridge (UI option)
+          uci set network.br_lan.ipv6='0'
+          
+          # Disable IPv6 DHCP (RA/DHCPv6)
+          uci -q set dhcp.lan.dhcpv6='disabled'
+          uci -q set dhcp.lan.ra='disabled'
+          uci -q set dhcp.lan.ndp='disabled'
+          /etc/init.d/odhcpd disable 2>/dev/null || true
           
           # Enable Packet Steering to distribute CPU load across all cores
           uci set network.@globals[0].packet_steering='1'
@@ -142,6 +184,24 @@ jobs:
               f.write(content)
           print("OK: h1radio added to nand_do_upgrade in platform.sh")
           PYEOF
+          
+          # Inject original Wi-Fi calibration file (board-2.bin) and firmware (firmware-5.bin)
+          if [ -f "../board-2.bin" ]; then
+            echo "Found original board-2.bin, injecting it for Wi-Fi calibration..."
+            mkdir -p package/base-files/files/lib/firmware/ath10k/QCA4019/hw1.0/
+            cp ../board-2.bin package/base-files/files/lib/firmware/ath10k/QCA4019/hw1.0/board-2.bin
+          else
+            echo "WARNING: board-2.bin not found in repository root!"
+          fi
+          
+          if [ -f "../firmware-5.bin" ]; then
+            echo "Found original firmware-5.bin, injecting it..."
+            mkdir -p package/base-files/files/lib/firmware/ath10k/QCA4019/hw1.0/
+            cp ../firmware-5.bin package/base-files/files/lib/firmware/ath10k/QCA4019/hw1.0/firmware-5.bin
+          fi
+          
+      - name: Compile the Firmware
+        run: |
           grep -B 1 -A 1 'h1radio' target/linux/ipq40xx/base-files/lib/upgrade/platform.sh || true
 
       - name: Create Superchannel Unlock Script
@@ -308,64 +368,80 @@ jobs:
           # Passive ARP Sniffer (UBNT-like IP+Host discovery)
           # ============================================
           mkdir -p files/usr/bin files/etc/init.d files/etc/uci-defaults
-          python3 << 'PYEOF'
-          import os
-          sniffer = (
-              '#!/bin/sh\n'
-              '# Passive ARP Sniffer for Bridge Mode AP\n'
-              'LEASES="/tmp/dhcp.leases"\n'
-              'CACHE="/tmp/.arp-sniffer-cache"\n'
-              'sleep 15\n'
-              'touch "$CACHE" "$LEASES"\n'
-              "tcpdump -i br-lan -l -n -e -t arp 2>/dev/null | awk '\n"
-              '{\n'
-              '    mac = ""; ip = ""\n'
-              '    if ($9 == "Request" && $12 == "tell") {\n'
-              '        mac = $1; ip = $13; sub(/,$/, "", ip)\n'
-              '    } else if ($9 == "Reply" && $11 == "is-at") {\n'
-              '        mac = $1; ip = $10\n'
-              '    }\n'
-              '    if (mac != "" && ip != "") {\n'
-              '        print mac " " ip\n'
-              '        fflush()\n'
-              '    }\n'
-              "}' | while read mac ip; do\n"
-              '    grep -q "$mac $ip" "$CACHE" 2>/dev/null && continue\n'
-              '    ip neigh replace "$ip" dev br-lan lladdr "$mac" nud reachable 2>/dev/null\n'
-              '    hostname=$(nslookup "$ip" 2>/dev/null | sed -n \'s/.*name = \\(.*\\)/\\1/p\' | sed \'s/\\.$//' "'" ' | head -1)\n'
-              '    if [ -z "$hostname" ]; then\n'
-              "        hostname=$(wget -qO- -T 2 \"http://$ip/\" 2>/dev/null | sed -n 's/.*<title>\\([^<]*\\)<\\/title>.*/\\1/ip' | head -1)\n"
-              '    fi\n'
-              '    [ -z "$hostname" ] && hostname="$ip"\n'
-              '    sed -i "/$mac/d" "$CACHE" 2>/dev/null\n'
-              '    echo "$mac $ip $hostname" >> "$CACHE"\n'
-              '    sed -i "/$mac/d" "$LEASES" 2>/dev/null\n'
-              '    echo "0 $mac $ip $hostname *" >> "$LEASES"\n'
-              'done\n'
-          )
-          initd = (
-              '#!/bin/sh /etc/rc.common\n'
-              'START=99\n'
-              'USE_PROCD=1\n'
-              'PROG=/usr/bin/passive-ip-sniffer.sh\n'
-              'start_service() {\n'
-              '    procd_open_instance\n'
-              '    procd_set_param command "$PROG"\n'
-              '    procd_set_param respawn 3600 5 0\n'
-              '    procd_close_instance\n'
-              '}\n'
-          )
-          uci = '#!/bin/sh\n/etc/init.d/passive-arp enable\nexit 0\n'
-          for path, content in [
-              ("files/usr/bin/passive-ip-sniffer.sh", sniffer),
-              ("files/etc/init.d/passive-arp", initd),
-              ("files/etc/uci-defaults/99-enable-passive-arp", uci),
-          ]:
-              with open(path, "w", newline="\n") as f:
-                  f.write(content)
-              os.chmod(path, 0o755)
-          print("OK: Passive ARP sniffer + init.d + uci-defaults created")
-          PYEOF
+          cat << 'EOF' > files/usr/bin/passive-ip-sniffer.sh
+          #!/bin/sh
+          # Dual Passive Sniffer (ARP + DHCP) for Bridge Mode AP
+          LEASES="/tmp/dhcp.leases"
+          sleep 15
+          touch "$LEASES"
+          
+          # 1. ARP Sniffer (Captures IP <-> MAC)
+          tcpdump -i br-lan -l -n -e -t arp 2>/dev/null | awk '
+          /Request who-has/ { ip=$4; mac=$6; gsub(/,/, "", mac); system("echo " ip " > /tmp/arp-ip-" tolower(mac)) }
+          /Reply is-at/ { ip=$3; mac=$5; gsub(/,/, "", mac); system("echo " ip " > /tmp/arp-ip-" tolower(mac)) }
+          ' &
+          
+          # 2. DHCP Sniffer (Captures Hostname <-> MAC)
+          tcpdump -i br-lan -l -n -e -v udp port 67 or port 68 2>/dev/null | awk '
+          /^[0-9:.]* ([0-9a-fA-F:]+) >/ { current_mac = tolower($2) }
+          /Hostname/ && /"/ {
+              s = $0; start = index(s, "\""); end = index(substr(s, start+1), "\"")
+              if (start > 0 && end > 0 && current_mac != "") {
+                  host = substr(s, start+1, end-1)
+                  system("echo \"" host "\" > /tmp/dhcp-host-" current_mac)
+              }
+          }
+          ' &
+          
+          # 3. Compiler: Merge into dhcp.leases
+          while true; do
+              > "$LEASES".new
+              for ipfile in /tmp/arp-ip-*; do
+                  [ -f "$ipfile" ] || continue
+                  mac="${ipfile##*-}"
+                  ip=$(cat "$ipfile")
+                  host="*"
+                  if [ -f "/tmp/dhcp-host-$mac" ]; then
+                      host=$(cat "/tmp/dhcp-host-$mac")
+                  else
+                      # Fallback for Static IPs: Try fetching HTTP Title once
+                      if [ ! -f "/tmp/http-host-$mac" ]; then
+                          title=$(wget -qO- -T 2 "http://$ip/" 2>/dev/null | grep -i '<title>' | sed -n 's/.*<title>\(.*\)<\/title>.*/\1/ip' | head -1 | tr -d '\r\n')
+                          if [ -n "$title" ]; then
+                              echo "$title" > "/tmp/http-host-$mac"
+                          else
+                              echo "$ip" > "/tmp/http-host-$mac"
+                          fi
+                      fi
+                      host=$(cat "/tmp/http-host-$mac")
+                  fi
+                  # Provide dummy lease time (1999999999) so LuCI shows it as active
+                  echo "1999999999 $mac $ip $host *" >> "$LEASES".new
+              done
+              mv "$LEASES".new "$LEASES"
+              sleep 5
+          done &
+          EOF
+          chmod +x files/usr/bin/passive-ip-sniffer.sh
+          
+          cat << 'EOF' > files/etc/init.d/passive-arp
+          #!/bin/sh /etc/rc.common
+          START=99
+          USE_PROCD=1
+          PROG=/usr/bin/passive-ip-sniffer.sh
+          start_service() {
+              procd_open_instance
+              procd_set_param command "$PROG"
+              procd_set_param respawn 3600 5 0
+              procd_close_instance
+          }
+          EOF
+          chmod +x files/etc/init.d/passive-arp
+          
+          echo '#!/bin/sh' > files/etc/uci-defaults/99-enable-passive-arp
+          echo '/etc/init.d/passive-arp enable' >> files/etc/uci-defaults/99-enable-passive-arp
+          echo 'exit 0' >> files/etc/uci-defaults/99-enable-passive-arp
+          chmod +x files/etc/uci-defaults/99-enable-passive-arp
 
           # Create helper script to extract real EEPROM calibration data after first boot
           mkdir -p files/usr/sbin
@@ -402,10 +478,51 @@ jobs:
           ./scripts/feeds update -a || true
           ./scripts/feeds install -a || true
           
-          # Fix Package Conflict (kmod-ath10k vs kmod-ath10k-ct)
-          # Replace the default -ct package globally for the ipq40xx target to avoid clashes
-          sed -i 's/kmod-ath10k-ct/kmod-ath10k/g' target/linux/ipq40xx/Makefile
-          sed -i 's/ath10k-firmware-qca4019-ct/ath10k-firmware-qca4019/g' target/linux/ipq40xx/Makefile
+          # Inject Custom UI JS for MAC Copy and IP Click
+          cat << 'JSEOF' >> feeds/luci/modules/luci-base/htdocs/luci-static/resources/luci.js
+          document.addEventListener('DOMContentLoaded', function() {
+              setInterval(function() {
+                  var tables = document.querySelectorAll('.assoclist');
+                  tables.forEach(function(table) {
+                      var rows = table.querySelectorAll('.tr');
+                      rows.forEach(function(row) {
+                          if (row.dataset.enhanced) return;
+                          var cells = row.querySelectorAll('.td');
+                          if (cells.length >= 3) {
+                              var macCell = cells[1];
+                              var hostCell = cells[2];
+                              var macMatch = macCell.innerText.match(/([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})/);
+                              if (macMatch && !macCell.querySelector('.copy-mac-btn')) {
+                                  var btn = document.createElement('button');
+                                  btn.innerHTML = '&#128203;';
+                                  btn.className = 'btn cbi-button cbi-button-apply copy-mac-btn';
+                                  btn.style.marginLeft = '8px';
+                                  btn.style.padding = '1px 4px';
+                                  btn.style.fontSize = '12px';
+                                  btn.title = 'Copy MAC Address';
+                                  btn.onclick = function() {
+                                      navigator.clipboard.writeText(macMatch[0]);
+                                      var oldBg = btn.style.backgroundColor;
+                                      btn.style.backgroundColor = '#4caf50';
+                                      setTimeout(function(){ btn.style.backgroundColor = oldBg; }, 1000);
+                                  };
+                                  macCell.appendChild(btn);
+                                  row.dataset.enhanced = "true";
+                              }
+                              var ipMatch = hostCell.innerText.match(/([0-9]{1,3}\.){3}[0-9]{1,3}/);
+                              if (ipMatch && !hostCell.querySelector('a')) {
+                                  var ip = ipMatch[0];
+                                  hostCell.innerHTML = hostCell.innerHTML.replace(ip, '<a href="http://' + ip + '" target="_blank" style="font-weight:bold; color:#0069d6; text-decoration:underline;">' + ip + '</a>');
+                                  row.dataset.enhanced = "true";
+                              }
+                          }
+                      });
+                  });
+              }, 2000);
+          });
+          JSEOF
+          
+          # The target uses -ct by default or we specify it in .config, no need to sed Makefile
           cat > .config << 'CFGEOF'
           CONFIG_TARGET_ipq40xx=y
           CONFIG_TARGET_ipq40xx_generic=y
@@ -414,8 +531,10 @@ jobs:
           CONFIG_PACKAGE_irqbalance=y
           CONFIG_PACKAGE_luci-app-irqbalance=y
           CONFIG_PACKAGE_kmod-ath=y
-          # CONFIG_PACKAGE_kmod-ath10k-ct is not set
-          # CONFIG_PACKAGE_ath10k-firmware-qca4019-ct is not set
+          CONFIG_PACKAGE_kmod-ath10k-ct=y
+          CONFIG_PACKAGE_ath10k-firmware-qca4019-ct=y
+          # CONFIG_PACKAGE_kmod-ath10k is not set
+          # CONFIG_PACKAGE_ath10k-firmware-qca4019 is not set
           CONFIG_ATH_USER_REGD=y
           CONFIG_PACKAGE_ATH_USER_REGD=y
           CONFIG_PACKAGE_kmod-mac80211=y
@@ -425,6 +544,8 @@ jobs:
           CONFIG_PACKAGE_wireless-regdb=y
           CONFIG_PACKAGE_tcpdump-mini=y
           CONFIG_PACKAGE_ip-full=y
+          CONFIG_PACKAGE_lldpd=y
+          CONFIG_PACKAGE_luci-theme-openwrt-2020=y
           CFGEOF
           make defconfig
 
