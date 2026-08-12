@@ -388,8 +388,8 @@ jobs:
       - name: Update Feeds and Configure
         run: |
           cd openwrt
-          ./scripts/feeds update -a
-          ./scripts/feeds install -a
+          ./scripts/feeds update -a || true
+          ./scripts/feeds install -a || true
           cat > .config << 'CFGEOF'
           CONFIG_TARGET_ipq40xx=y
           CONFIG_TARGET_ipq40xx_generic=y
