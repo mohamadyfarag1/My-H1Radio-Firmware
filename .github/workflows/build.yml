@@ -30,44 +30,38 @@ jobs:
         run: |
           git clone -b openwrt-23.05 https://git.openwrt.org/openwrt/openwrt.git openwrt
 
-      - name: Generate Modern Device Tree (DTS)
+      - name: Decompile and Patch Original Device Tree (DTS)
         run: |
           cd openwrt
-          python3 << 'PYEOF'
-          dts_content = """// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
-          #include "qcom-ipq4019-ap.dk01.1-c1.dts"
-
-          / {
-              model = "H1Radio TI04-708HP";
-              compatible = "h1radio,ti04-708hp", "qcom,ipq4019";
-          };
-
-          &wifi0 {
-              status = "okay";
-              qcom,ath10k-calibration-variant = "8devices-Jalapeno";
-          };
-
-          &wifi1 {
-              status = "okay";
-              qcom,ath10k-calibration-variant = "8devices-Jalapeno";
-          };
-          """
+          # We use the original router.dtb from the repo which contains the correct 128MB SPI NAND layout
+          dts_path="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-h1radio-ti04-708hp.dts"
+          mkdir -p $(dirname "$dts_path")
+          dtc -I dtb -O dts -o "$dts_path" ../router.dtb
           
-          # Write it to the dts directory
-          import os
-          dts_dir = "target/linux/ipq40xx/files/arch/arm/boot/dts"
-          os.makedirs(dts_dir, exist_ok=True)
-          with open(f"{dts_dir}/qcom-ipq4019-h1radio-ti04-708hp.dts", "w") as f:
-              f.write(dts_content)
+          # Patch the DTS to add the ath10k calibration variant for Wi-Fi
+          python3 << 'PYEOF'
+          import re
+          path = "target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-h1radio-ti04-708hp.dts"
+          with open(path, "r") as f:
+              content = f.read()
               
-          # Also write to main dts dir just in case
-          main_dts = "target/linux/ipq40xx/dts"
-          os.makedirs(main_dts, exist_ok=True)
-          with open(f"{main_dts}/qcom-ipq4019-h1radio-ti04-708hp.dts", "w") as f:
-              f.write(dts_content)
-              
-          print("Modern DTS generated and injected successfully.")
+          # Inject variant above compatible = "qcom,ath10k"
+          content = re.sub(
+              r'(compatible\s*=\s*"qcom,ath10k";)', 
+              r'qcom,ath10k-calibration-variant = "8devices-Jalapeno";\n\t\t\t\1', 
+              content
+          )
+          
+          with open(path, "w") as f:
+              f.write(content)
           PYEOF
+          
+          # Also write to main dts dir to be safe
+          main_dts="target/linux/ipq40xx/dts"
+          mkdir -p "$main_dts"
+          cp "$dts_path" "$main_dts/"
+          
+          echo "Original DTB decompiled and patched successfully."
 
       - name: Patch Makefiles for Custom Device
         run: |
@@ -101,16 +95,24 @@ jobs:
           uci commit wireless
           wifi
           
-          # Setup DSA bridge to include all ports
+          # Setup DSA bridge dynamically for all available ports
           uci -q delete network.@device[0]
+          ports=""
+          for iface in lan1 lan2 lan3 lan4 eth0 eth1 eth2; do
+              if ip link show "$iface" >/dev/null 2>&1; then
+                  ports="$ports $iface"
+              fi
+          done
           uci set network.br_lan=device
           uci set network.br_lan.name='br-lan'
           uci set network.br_lan.type='bridge'
-          uci add_list network.br_lan.ports='lan1'
-          uci add_list network.br_lan.ports='lan2'
-          uci add_list network.br_lan.ports='lan3'
-          uci add_list network.br_lan.ports='lan4'
+          uci set network.br_lan.ports="$ports"
+          
+          uci set network.lan=interface
           uci set network.lan.device='br-lan'
+          uci set network.lan.proto='static'
+          uci set network.lan.ipaddr='192.168.1.1'
+          uci set network.lan.netmask='255.255.255.0'
           uci commit network
           /etc/init.d/network restart
           exit 0
