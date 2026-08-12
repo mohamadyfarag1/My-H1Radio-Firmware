@@ -28,24 +28,46 @@ jobs:
 
       - name: Clone OpenWrt Source
         run: |
-          git clone https://git.openwrt.org/openwrt/openwrt.git openwrt
+          git clone -b openwrt-23.05 https://git.openwrt.org/openwrt/openwrt.git openwrt
 
-      - name: Decompile and Inject Device Tree
+      - name: Generate Modern Device Tree (DTS)
         run: |
           cd openwrt
-          # Decompile router.dtb to DTS source
-          dtc -I dtb -O dts -s ../router.dtb > /tmp/h1radio.dts
+          python3 << 'PYEOF'
+          dts_content = """// SPDX-License-Identifier: GPL-2.0-or-later OR MIT
+          #include "qcom-ipq4019-ap.dk01.1-c1.dts"
 
-          # Place DTS in ALL possible locations OpenWrt may look for it
-          # Location 1: files overlay (for custom devices)
-          mkdir -p target/linux/ipq40xx/files/arch/arm/boot/dts
-          cp /tmp/h1radio.dts target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-h1radio-ti04-708hp.dts
+          / {
+              model = "H1Radio TI04-708HP";
+              compatible = "h1radio,ti04-708hp", "qcom,ipq4019";
+          };
 
-          # Location 2: The main DTS directory used by ipq40xx target
-          mkdir -p target/linux/ipq40xx/dts
-          cp /tmp/h1radio.dts target/linux/ipq40xx/dts/qcom-ipq4019-h1radio-ti04-708hp.dts
+          &wifi0 {
+              status = "okay";
+              qcom,ath10k-calibration-variant = "8devices-Jalapeno";
+          };
 
-          echo "DTS injected into all locations"
+          &wifi1 {
+              status = "okay";
+              qcom,ath10k-calibration-variant = "8devices-Jalapeno";
+          };
+          """
+          
+          # Write it to the dts directory
+          import os
+          dts_dir = "target/linux/ipq40xx/files/arch/arm/boot/dts"
+          os.makedirs(dts_dir, exist_ok=True)
+          with open(f"{dts_dir}/qcom-ipq4019-h1radio-ti04-708hp.dts", "w") as f:
+              f.write(dts_content)
+              
+          # Also write to main dts dir just in case
+          main_dts = "target/linux/ipq40xx/dts"
+          os.makedirs(main_dts, exist_ok=True)
+          with open(f"{main_dts}/qcom-ipq4019-h1radio-ti04-708hp.dts", "w") as f:
+              f.write(dts_content)
+              
+          print("Modern DTS generated and injected successfully.")
+          PYEOF
 
       - name: Patch Makefiles for Custom Device
         run: |
@@ -62,11 +84,38 @@ jobs:
             printf '\tBLOCKSIZE := 128k\n'
             printf '\tPAGESIZE := 2048\n'
             printf '\tIMAGE_SIZE := 32768k\n'
-            printf '\tDEVICE_PACKAGES := kmod-ath10k-ct ath10k-firmware-qca4019-ct\n'
+            printf '\tDEVICE_PACKAGES := kmod-ath10k ath10k-firmware-qca4019\n'
             printf 'endef\n'
             printf 'TARGET_DEVICES += h1radio_ti04-708hp\n'
           } >> target/linux/ipq40xx/image/generic.mk
 
+      - name: Add Network and WiFi Defaults
+        run: |
+          cd openwrt
+          mkdir -p package/base-files/files/etc/uci-defaults
+          cat << 'EOF' > package/base-files/files/etc/uci-defaults/99-custom-network
+          #!/bin/sh
+          # Enable WiFi radios
+          uci -q set wireless.@wifi-device[0].disabled=0
+          uci -q set wireless.@wifi-device[1].disabled=0
+          uci commit wireless
+          wifi
+          
+          # Setup DSA bridge to include all ports
+          uci -q delete network.@device[0]
+          uci set network.br_lan=device
+          uci set network.br_lan.name='br-lan'
+          uci set network.br_lan.type='bridge'
+          uci add_list network.br_lan.ports='lan1'
+          uci add_list network.br_lan.ports='lan2'
+          uci add_list network.br_lan.ports='lan3'
+          uci add_list network.br_lan.ports='lan4'
+          uci set network.lan.device='br-lan'
+          uci commit network
+          /etc/init.d/network restart
+          exit 0
+          EOF
+          chmod +x package/base-files/files/etc/uci-defaults/99-custom-network
       - name: Patch platform.sh for sysupgrade support
         run: |
           cd openwrt
