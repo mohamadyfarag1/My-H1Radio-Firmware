@@ -41,9 +41,7 @@ uci set network.wan=interface
 uci set network.wan.device='wan'
 uci set network.wan.proto='dhcp'
 
-uci set network.wan6=interface
-uci set network.wan6.device='wan'
-uci set network.wan6.proto='dhcpv6'
+
 
 # Enable Packet Steering for multi-core performance
 uci set network.@globals[0].packet_steering='1'
@@ -143,10 +141,20 @@ done
 
 exit 0
 RCEOF
+
+# 10. Fix permissions
+chmod +x /etc/init.d/*
 chmod +x /etc/rc.local
+chmod +x /usr/bin/auto-extroot.sh
 
 # 11. Enable services
+uci set irqbalance.irqbalance.enabled='1'
+uci commit irqbalance
 /etc/init.d/irqbalance enable 2>/dev/null
+/etc/init.d/irqbalance start 2>/dev/null
+
+# Replace https with http in opkg feeds
+sed -i 's/https/http/g' /etc/opkg/distfeeds.conf
 /etc/init.d/network restart
 
 exit 0
