@@ -34,14 +34,14 @@ jobs:
         run: |
           cd openwrt
           # We use the original router.dtb from the repo which contains the correct 128MB SPI NAND layout
-          dts_path="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-h1radio-ti04-708hp.dts"
+          dts_path="target/linux/ipq40xx/files/arch/arm/boot/dts/qcom/qcom-ipq4019-h1radio-ti04-708hp.dts"
           mkdir -p $(dirname "$dts_path")
           dtc -I dtb -O dts -o "$dts_path" ../router.dtb
           
           # Patch the DTS to add the ath10k calibration variant for Wi-Fi
           python3 << 'PYEOF'
           import re
-          path = "target/linux/ipq40xx/files/arch/arm/boot/dts/qcom-ipq4019-h1radio-ti04-708hp.dts"
+          path = "target/linux/ipq40xx/files/arch/arm/boot/dts/qcom/qcom-ipq4019-h1radio-ti04-708hp.dts"
           with open(path, "r") as f:
               content = f.read()
               
@@ -64,7 +64,7 @@ jobs:
           PYEOF
           
           # Also write to main dts dir to be safe
-          main_dts="target/linux/ipq40xx/dts"
+          main_dts="target/linux/ipq40xx/dts/qcom"
           mkdir -p "$main_dts"
           cp "$dts_path" "$main_dts/"
           
