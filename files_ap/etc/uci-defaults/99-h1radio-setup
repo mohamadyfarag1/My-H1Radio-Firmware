@@ -92,7 +92,6 @@ uci add_list wireless.default_radio1.basic_rate='24000'
 uci add_list wireless.default_radio1.basic_rate='54000'
 
 uci commit wireless
-wifi
 
 # 8. Firewall Software Offloading
 uci set firewall.@defaults[0].flow_offloading='1'
@@ -155,6 +154,11 @@ uci commit irqbalance
 
 # Replace https with http in opkg feeds
 sed -i 's/https/http/g' /etc/opkg/distfeeds.conf
-/etc/init.d/network restart
+
+# 12. Create LuCI Extroot Button
+uci set commands.extroot=command
+uci set commands.extroot.name='Format USB & Expand Space (Extroot)'
+uci set commands.extroot.command='/usr/bin/auto-extroot.sh'
+uci commit commands
 
 exit 0
