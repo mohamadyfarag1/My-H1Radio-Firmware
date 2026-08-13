@@ -599,10 +599,13 @@ jobs:
           echo "======================================="
           echo "Step 3: Starting Full Compilation..."
           echo "======================================="
-          make -j$(nproc) || make -j1 V=s 2>&1 | tee build.log
+          make -j$(nproc) || { make -j1 V=s 2>&1 | tee build.log; exit ${PIPESTATUS[0]}; }
 
       - name: Upload Artifacts
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: H1Radio_TI04-708HP_SuperFirmware
-          path: openwrt/bin/targets/ipq40xx/generic/*
+          path: |
+            openwrt/bin/targets/ipq40xx/generic/*
+            openwrt/build.log
