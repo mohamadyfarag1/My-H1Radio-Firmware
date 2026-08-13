@@ -130,17 +130,17 @@ jobs:
           for REGD in $(find . -path "*/drivers/net/wireless/ath/regd.c" 2>/dev/null); do
             echo "[PATCH 1] Patching: $REGD"
             # 2GHz CH01-11 rule: expand to full 2.3GHz band
-            sed -i 's/REG_RULE(2412-10, 2462+10, 40, 0, 20, 0)/REG_RULE(2192-10, 2732+10, 40, 0, 30, 0)/g' "$REGD"
+            sed -i 's/REG_RULE(2412-10, 2462+10, 40, 0, 20, 0)/REG_RULE(2192-10, 2732+10, 40, 0, 33, 0)/g' "$REGD"
             # 2GHz CH12-13 rule: expand to full band
-            sed -i 's/REG_RULE(2467-10, 2472+10, 40, 0, 20,/REG_RULE(2192-10, 2732+10, 40, 0, 30,/g' "$REGD"
+            sed -i 's/REG_RULE(2467-10, 2472+10, 40, 0, 20,/REG_RULE(2192-10, 2732+10, 40, 0, 33,/g' "$REGD"
             # 2GHz CH14 rule: increase power
-            sed -i 's/REG_RULE(2484-10, 2484+10, 40, 0, 20,/REG_RULE(2484-10, 2484+10, 40, 0, 30,/g' "$REGD"
+            sed -i 's/REG_RULE(2484-10, 2484+10, 40, 0, 20,/REG_RULE(2484-10, 2484+10, 40, 0, 33,/g' "$REGD"
             # 5GHz first range: expand to full 5GHz
-            sed -i 's/REG_RULE(5150-10, 5350+10, 80, 0, 30,/REG_RULE(4900-10, 6100+10, 160, 0, 30,/g' "$REGD"
+            sed -i 's/REG_RULE(5150-10, 5350+10, 80, 0, 30,/REG_RULE(4900-10, 6100+10, 160, 0, 33,/g' "$REGD"
             # 5GHz second range: expand to full 5GHz
-            sed -i 's/REG_RULE(5470-10, 5850+10, 80, 0, 30,/REG_RULE(4900-10, 6100+10, 160, 0, 30,/g' "$REGD"
+            sed -i 's/REG_RULE(5470-10, 5850+10, 80, 0, 30,/REG_RULE(4900-10, 6100+10, 160, 0, 33,/g' "$REGD"
             # 5GHz third range: expand to full 5GHz
-            sed -i 's/REG_RULE(5725-10, 5850+10, 80, 0, 30,/REG_RULE(4900-10, 6100+10, 160, 0, 30,/g' "$REGD"
+            sed -i 's/REG_RULE(5725-10, 5850+10, 80, 0, 30,/REG_RULE(4900-10, 6100+10, 160, 0, 33,/g' "$REGD"
             # Remove NO_IR (No Initiate Radiation) - allow active scan
             sed -i 's/NL80211_RRF_NO_IR/0/g' "$REGD"
             # Remove NO_OFDM restriction - allow OFDM on all channels
@@ -157,11 +157,11 @@ jobs:
           for REG in $(find . -path "*/net/wireless/reg.c" 2>/dev/null); do
             echo "[PATCH 2] Patching: $REG"
             # Expand world regdomain 00 - 2GHz
-            sed -i 's/REG_RULE(2412-10, 2462+10, 40, 6, 20, 0)/REG_RULE(2192-10, 2732+10, 40, 6, 30, 0)/g' "$REG"
+            sed -i 's/REG_RULE(2412-10, 2462+10, 40, 6, 20, 0)/REG_RULE(2192-10, 2732+10, 40, 6, 33, 0)/g' "$REG"
             # Remove CH12-13 separate rule (now covered by expanded range)
-            sed -i 's/REG_RULE(2467-10, 2472+10, 20, 6, 20,/REG_RULE(2192-10, 2732+10, 40, 6, 30,/g' "$REG"
+            sed -i 's/REG_RULE(2467-10, 2472+10, 20, 6, 20,/REG_RULE(2192-10, 2732+10, 40, 6, 33,/g' "$REG"
             # Expand CH14 power
-            sed -i 's/REG_RULE(2484-10, 2484+10, 20, 6, 20,/REG_RULE(2484-10, 2484+10, 40, 6, 30,/g' "$REG"
+            sed -i 's/REG_RULE(2484-10, 2484+10, 20, 6, 20,/REG_RULE(2484-10, 2484+10, 40, 6, 33,/g' "$REG"
             # Remove ALL is_valid_rd() validation blocks (3 locations in the forum patch)
             # Location 1: reg_set_rd_user
             sed -i '/if (!is_valid_rd(rd)) {/{N;N;N;N;d}' "$REG"
@@ -249,8 +249,8 @@ jobs:
                       f.write('country 00:\n')
                   else:
                       f.write(f'country {c}:\n')
-                  f.write('\t(2192 - 2732 @ 40), (30)\n')
-                  f.write('\t(4900 - 6100 @ 160), (30)\n')
+                  f.write('\t(2192 - 2732 @ 40), (33)\n')
+                  f.write('\t(4900 - 6100 @ 160), (33)\n')
                   f.write('\n')
           print(f'Generated db.txt with {len(countries)} countries')
           "
@@ -262,9 +262,8 @@ jobs:
           cd openwrt
           mkdir -p files/lib/firmware/ath10k/QCA4019/hw1.0/
           cp ../board-2.bin files/lib/firmware/ath10k/QCA4019/hw1.0/board-2.bin
-          if [ -f "../firmware-5.bin" ]; then
-            cp ../firmware-5.bin files/lib/firmware/ath10k/QCA4019/hw1.0/firmware-5.bin
-          fi
+          
+          # Copy our generated regulatory database
           if [ -f ../wireless-regdb/regulatory.db ]; then
             cp ../wireless-regdb/regulatory.db files/lib/firmware/regulatory.db
             echo "Using freshly built regulatory.db"
