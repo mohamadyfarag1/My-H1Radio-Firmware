@@ -599,7 +599,7 @@ jobs:
           echo "======================================="
           echo "Step 3: Starting Full Compilation..."
           echo "======================================="
-          make -j$(nproc) || make -j1 V=s
+          make -j$(nproc) || make -j1 V=s 2>&1 | tee build.log
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
