@@ -90,85 +90,7 @@ jobs:
             printf 'TARGET_DEVICES += h1radio_ti04-708hp\n'
           } >> target/linux/ipq40xx/image/generic.mk
 
-      - name: Add Network and WiFi Defaults
-        run: |
-          cd openwrt
-          mkdir -p package/base-files/files/etc/uci-defaults
-          cat << 'EOF' > package/base-files/files/etc/uci-defaults/99-custom-network
-          #!/bin/sh
-          # Set hostname and UI theme
-          uci set system.@system[0].hostname='Horus-9200'
-          uci commit system
-          uci set luci.main.mediaurlbase='/luci-static/openwrt2020'
-          uci commit luci
-          
-          # Enable WiFi radios and set SSIDs
-          uci -q set wireless.@wifi-device[0].disabled=0
-          uci -q set wireless.@wifi-device[1].disabled=0
-          uci -q set wireless.default_radio0.ssid='Horus-2.4'
-          uci -q set wireless.default_radio1.ssid='Horus-5G'
-          
-          # 1. Force 5G to AC and disable disassoc_low_ack
-          uci -q set wireless.radio1.require_mode='ac'
-          uci -q set wireless.default_radio1.disassoc_low_ack='0'
-          uci commit wireless
-          wifi
-          
-          # 2 & 3. Inject bitrates lock into rc.local directly during build
-          cat << 'RCLOCAL' > package/base-files/files/etc/rc.local
-          # Put your custom commands here that should be executed once
-          # the system init finished. By default this file does nothing.
-          
-          # Force 5GHz to high bitrates to prevent slow connections
-          for iface in $(iw dev | grep -B 1 "phy#1" -A 2 | grep Interface | awk '{print $2}'); do
-              iw dev "$iface" set bitrates vht-mcs-5 1:2-9 2:1-9 3:1-9 4:0-9
-          done
-          
-          exit 0
-          RCLOCAL
-          chmod +x package/base-files/files/etc/rc.local
-          
-          # Setup DSA bridge dynamically for all available ports
-          uci -q delete network.@device[0]
-          uci set network.br_lan=device
-          uci set network.br_lan.name='br-lan'
-          uci set network.br_lan.type='bridge'
-          for iface in lan1 lan2 lan3 lan4 eth0 eth1 eth2; do
-              if ip link show "$iface" >/dev/null 2>&1; then
-                  uci add_list network.br_lan.ports="$iface"
-              fi
-          done
-          
-          uci set network.lan=interface
-          uci set network.lan.device='br-lan'
-          uci set network.lan.proto='static'
-          uci set network.lan.ipaddr='192.168.100.1'
-          uci set network.lan.netmask='255.255.255.0'
-          uci set dhcp.lan.ignore='1'
-          uci set network.lan.ipv6='0'
-          
-          # Disable IPv6 on the bridge (UI option)
-          uci set network.br_lan.ipv6='0'
-          
-          # Disable IPv6 DHCP (RA/DHCPv6)
-          uci -q set dhcp.lan.dhcpv6='disabled'
-          uci -q set dhcp.lan.ra='disabled'
-          uci -q set dhcp.lan.ndp='disabled'
-          /etc/init.d/odhcpd disable 2>/dev/null || true
-          
-          # Enable Packet Steering to distribute CPU load across all cores
-          uci set network.@globals[0].packet_steering='1'
-          
-          uci commit network
-          /etc/init.d/network restart
-          
-          # Ensure irqbalance is enabled and started
-          /etc/init.d/irqbalance enable
-          /etc/init.d/irqbalance start
-          
-          exit 0
-          EOF
-          chmod +x package/base-files/files/etc/uci-defaults/99-custom-network
+
       - name: Patch platform.sh for sysupgrade support
         run: |
           cd openwrt
@@ -566,7 +488,6 @@ jobs:
           CONFIG_PACKAGE_wireless-regdb=y
           CONFIG_PACKAGE_tcpdump-mini=y
           CONFIG_PACKAGE_ip-full=y
-          CONFIG_PACKAGE_lldpd=y
           CONFIG_PACKAGE_luci-theme-openwrt-2020=y
           CFGEOF
           make defconfig
