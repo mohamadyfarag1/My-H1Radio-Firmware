@@ -25,8 +25,6 @@ uci set network.@device[0].ipv6='0'
 uci set network.lan.proto='static'
 uci set network.lan.ipaddr='192.168.100.1'
 uci set network.lan.netmask='255.255.255.0'
-uci set network.lan.gateway='192.168.100.254'
-uci set network.lan.dns='8.8.8.8'
 uci set network.lan.ipv6='0'
 
 # Disable DHCP server (this is an AP, not a router)
