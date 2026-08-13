@@ -1,79 +1,58 @@
 #!/bin/sh
-# =============================================================================
-#  H1Radio TI04-708HP  -  First Boot Configuration (AP mode)
-#  This is the SINGLE source of truth for network + wifi setup. The old build
-#  also injected a "99-custom-network" that fought with this file; that step
-#  has been removed.
-# =============================================================================
 
-# -----------------------------------------------------------------------------
-# 1. Bridge br-lan  -  SELF-ADAPTING.
-#    This device is not registered in /etc/board.d/02_network, and its base DTS
-#    did not create a fixed "@device[0]" bridge. So instead of ASSUMING port
-#    names exist, we build br-lan from whichever LAN ports the kernel actually
-#    created (visible under /sys/class/net at first boot). This is why the old
-#    build ended up with an empty bridge / missing wan: it referenced ports
-#    that did not exist on this hardware.
-# -----------------------------------------------------------------------------
-uci -q delete network.@device[0]
-uci -q delete network.br_lan
-uci set network.br_lan=device
-uci set network.br_lan.name='br-lan'
-uci set network.br_lan.type='bridge'
-uci set network.br_lan.stp='1'
+# =============================================
+# Horus 9200 - First Boot Configuration
+# =============================================
 
-FOUND_LAN=0
-for p in lan1 lan2 lan3 lan4 lan; do
-    if [ -e "/sys/class/net/$p" ]; then
-        uci add_list network.br_lan.ports="$p"
-        FOUND_LAN=1
-    fi
-done
-# Absolute fallback: if none of the expected labels exist, log every netdev so
-# you can see the real port names (paste `logread -e h1radio` back to me).
-if [ "$FOUND_LAN" = "0" ]; then
-    logger -t h1radio "No lan* ports found. Available netdevs: $(ls /sys/class/net | tr '\n' ' ')"
-fi
+# 1. System & UI
+uci set system.@system[0].hostname='Horus-9200'
+uci commit system
+uci set luci.main.mediaurlbase='/luci-static/openwrt2020'
+uci commit luci
 
-# -----------------------------------------------------------------------------
-# 2. LAN interface bound to the bridge
-# -----------------------------------------------------------------------------
-uci set network.lan=interface
-uci set network.lan.device='br-lan'
+# 2. Bridge Device (br-lan) with all LAN ports
+uci set network.@device[0].name='br-lan'
+uci set network.@device[0].type='bridge'
+uci delete network.@device[0].ports 2>/dev/null
+uci add_list network.@device[0].ports='lan1'
+uci add_list network.@device[0].ports='lan2'
+uci add_list network.@device[0].ports='lan3'
+uci add_list network.@device[0].ports='lan4'
+uci set network.@device[0].stp='1'
+uci set network.@device[0].ipv6='0'
+
+# 3. LAN interface (Static, no DHCP server)
 uci set network.lan.proto='static'
-uci set network.lan.ipaddr='192.168.1.1'
+uci set network.lan.ipaddr='192.168.100.1'
 uci set network.lan.netmask='255.255.255.0'
+uci set network.lan.gateway='192.168.100.254'
+uci set network.lan.dns='8.8.8.8'
+uci set network.lan.ipv6='0'
 
-# -----------------------------------------------------------------------------
-# 3. WAN  -  only if a real 'wan' port exists on this hardware
-# -----------------------------------------------------------------------------
-if [ -e /sys/class/net/wan ]; then
-    uci set network.wan=interface
-    uci set network.wan.device='wan'
-    uci set network.wan.proto='dhcp'
-    uci set network.wan6=interface
-    uci set network.wan6.device='wan'
-    uci set network.wan6.proto='dhcpv6'
-else
-    logger -t h1radio "No 'wan' port present; skipping WAN setup."
-fi
+# Disable DHCP server (this is an AP, not a router)
+uci set dhcp.lan.ignore='1'
+
+# Disable IPv6 DHCP/RA
+uci -q set dhcp.lan.dhcpv6='disabled'
+uci -q set dhcp.lan.ra='disabled'
+uci -q set dhcp.lan.ndp='disabled'
+/etc/init.d/odhcpd disable 2>/dev/null || true
+
+# 4. WAN interface (for when used as router)
+uci set network.wan=interface
+uci set network.wan.device='wan'
+uci set network.wan.proto='dhcp'
+
+uci set network.wan6=interface
+uci set network.wan6.device='wan'
+uci set network.wan6.proto='dhcpv6'
+
+# Enable Packet Steering for multi-core performance
+uci set network.@globals[0].packet_steering='1'
 
 uci commit network
 
-# -----------------------------------------------------------------------------
-# 4. Radios
-#    ROOT CAUSE of "wireless always disabled": OpenWrt ships wifi DISABLED by
-#    default, and if /etc/config/wireless does not exist yet when this script
-#    runs, our `uci set wireless.radioX...` calls hit nothing and the system
-#    later regenerates the config with disabled='1'. Fix: make sure the config
-#    exists FIRST (generate it if missing), THEN enable the radios here.
-#
-#    NOTE: channel '1' (2412 MHz) and '149' are STANDARD channels. To try the
-#    unlocked spectrum, change radio0.channel AFTER boot and watch `logread` /
-#    `iw` to confirm the firmware accepts it (see README for the ath10k caveat).
-# -----------------------------------------------------------------------------
-[ -e /etc/config/wireless ] || wifi config
-
+# 5. Radio 0 (2.4GHz) - Superchannel ready
 uci set wireless.radio0.disabled='0'
 uci set wireless.radio0.country='US'
 uci set wireless.radio0.channel='1'
@@ -82,6 +61,7 @@ uci set wireless.radio0.txpower='30'
 uci set wireless.radio0.noscan='1'
 uci set wireless.radio0.distance='5000'
 
+# 6. Radio 1 (5GHz) - AC forced, Superchannel ready
 uci set wireless.radio1.disabled='0'
 uci set wireless.radio1.country='US'
 uci set wireless.radio1.channel='149'
@@ -89,44 +69,41 @@ uci set wireless.radio1.htmode='VHT80'
 uci set wireless.radio1.txpower='30'
 uci set wireless.radio1.noscan='1'
 uci set wireless.radio1.distance='5000'
+uci -q set wireless.radio1.require_mode='ac'
 
-# -----------------------------------------------------------------------------
-# 5. WiFi interfaces (AP + WDS, open)
-# -----------------------------------------------------------------------------
+# 7. WiFi AP interfaces (WDS + high bitrates)
 uci set wireless.default_radio0.disabled='0'
-uci set wireless.default_radio0.ssid='H1Radio-2.4G'
+uci set wireless.default_radio0.ssid='Horus-2.4'
 uci set wireless.default_radio0.encryption='none'
 uci set wireless.default_radio0.network='lan'
 uci set wireless.default_radio0.mode='ap'
 uci set wireless.default_radio0.wds='1'
 uci set wireless.default_radio0.mcast_rate='24000'
-uci -q delete wireless.default_radio0.basic_rate
+uci delete wireless.default_radio0.basic_rate 2>/dev/null
 uci add_list wireless.default_radio0.basic_rate='24000'
 uci add_list wireless.default_radio0.basic_rate='54000'
 
 uci set wireless.default_radio1.disabled='0'
-uci set wireless.default_radio1.ssid='H1Radio-5G'
+uci set wireless.default_radio1.ssid='Horus-5G'
 uci set wireless.default_radio1.encryption='none'
 uci set wireless.default_radio1.network='lan'
 uci set wireless.default_radio1.mode='ap'
 uci set wireless.default_radio1.wds='1'
+uci set wireless.default_radio1.disassoc_low_ack='0'
 uci set wireless.default_radio1.mcast_rate='24000'
-uci -q delete wireless.default_radio1.basic_rate
+uci delete wireless.default_radio1.basic_rate 2>/dev/null
 uci add_list wireless.default_radio1.basic_rate='24000'
 uci add_list wireless.default_radio1.basic_rate='54000'
 
 uci commit wireless
+wifi
 
-# -----------------------------------------------------------------------------
-# 6. Firewall software offloading
-# -----------------------------------------------------------------------------
+# 8. Firewall Software Offloading
 uci set firewall.@defaults[0].flow_offloading='1'
 uci set firewall.@defaults[0].flow_offloading_hw='0'
 uci commit firewall
 
-# -----------------------------------------------------------------------------
-# 7. SMP IRQ affinity (spread eth/wifi IRQs across cores)
-# -----------------------------------------------------------------------------
+# 9. SMP IRQ Affinity (distribute interrupts across CPU cores)
 cat << 'EOF' > /etc/init.d/smp_affinity
 #!/bin/sh /etc/rc.common
 START=99
@@ -149,26 +126,29 @@ start() {
     done
 }
 EOF
+
 chmod +x /etc/init.d/smp_affinity
 /etc/init.d/smp_affinity enable
 
-# -----------------------------------------------------------------------------
-# 8. CPU performance governor (now + on every boot via rc.local)
-# -----------------------------------------------------------------------------
-if [ ! -f /etc/rc.local ]; then
-    printf '#!/bin/sh\nexit 0\n' > /etc/rc.local
-    chmod +x /etc/rc.local
-fi
-for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
-    echo "performance" > "$cpu" 2>/dev/null
+# 10. rc.local: 5GHz Bitrates Lock + CPU Performance
+cat << 'RCEOF' > /etc/rc.local
+#!/bin/sh
+# Force 5GHz to high bitrates to prevent slow connections
+for iface in $(iw dev | grep -B 1 "phy#1" -A 2 | grep Interface | awk '{print $2}'); do
+    iw dev "$iface" set bitrates vht-mcs-5 1:2-9 2:1-9 3:1-9 4:0-9
 done
-# only add the boot-time line once
-grep -q 'scaling_governor' /etc/rc.local || \
-  sed -i '/exit 0/i for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do echo performance > $cpu; done' /etc/rc.local
 
-# -----------------------------------------------------------------------------
-# 9. irqbalance
-# -----------------------------------------------------------------------------
+# CPU Performance Mode
+for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
+    echo "performance" > $cpu 2>/dev/null
+done
+
+exit 0
+RCEOF
+chmod +x /etc/rc.local
+
+# 11. Enable services
 /etc/init.d/irqbalance enable 2>/dev/null
+/etc/init.d/network restart
 
 exit 0
