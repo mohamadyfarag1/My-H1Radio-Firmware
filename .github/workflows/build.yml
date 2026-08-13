@@ -28,7 +28,7 @@ jobs:
 
       - name: Clone OpenWrt Source
         run: |
-          git clone -b openwrt-24.10 https://git.openwrt.org/openwrt/openwrt.git openwrt
+          git clone --depth 1 --branch v24.10.8 https://git.openwrt.org/openwrt/openwrt.git openwrt
 
       - name: Decompile and Patch Original Device Tree (DTS)
         run: |
@@ -273,6 +273,8 @@ jobs:
             echo "Using existing regulatory.db from repo"
           fi
           cp -r ../files_ap/* files/
+          # CRITICAL: Strip Windows CRLF line endings - without this, shell scripts fail silently on Linux
+          find files/ -type f -exec sed -i 's/\r$//' {} +
           chmod +x files/etc/uci-defaults/*
 
           # ============================================
@@ -288,8 +290,6 @@ jobs:
               title=$(wget -qO- -T 2 "http://$ip/" 2>/dev/null | grep -i '<title>' | sed -n 's/.*<title>\(.*\)<\/title>.*/\1/ip' | head -1 | tr -d '\r\n')
               if [ -n "$title" ]; then
                   echo "$title" > "/tmp/http-host-$mac"
-              else
-                  echo "Static-IP" > "/tmp/http-host-$mac"
               fi
           fi
           > /tmp/dhcp.leases.new
@@ -297,7 +297,7 @@ jobs:
               [ -f "$f" ] || continue
               m="${f##*-}"
               i=$(cat "$f")
-              h="Static-IP"
+              h="*"
               if [ -f "/tmp/dhcp-host-$m" ]; then
                   h=$(cat "/tmp/dhcp-host-$m")
               elif [ -f "/tmp/http-host-$m" ]; then
@@ -411,45 +411,35 @@ jobs:
           ./scripts/feeds update -a || true
           ./scripts/feeds install -a || true
           
-          # Inject Custom UI JS for MAC Copy and IP Click
+          # Inject Custom UI JS for MAC Click-to-Copy and IP Click
           cat << 'JSEOF' >> feeds/luci/modules/luci-base/htdocs/luci-static/resources/luci.js
           document.addEventListener('DOMContentLoaded', function() {
               setInterval(function() {
-                  var tables = document.querySelectorAll('.assoclist');
-                  tables.forEach(function(table) {
-                      var rows = table.querySelectorAll('.tr');
-                      rows.forEach(function(row) {
-                          if (row.dataset.enhanced) return;
-                          var cells = row.querySelectorAll('.td');
-                          if (cells.length >= 3) {
-                              var macCell = cells[1];
-                              var hostCell = cells[2];
-                              var macMatch = macCell.innerText.match(/([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})/);
-                              if (macMatch && !macCell.querySelector('.copy-mac-btn')) {
-                                  var btn = document.createElement('button');
-                                  btn.innerHTML = '&#128203;';
-                                  btn.className = 'btn cbi-button cbi-button-apply copy-mac-btn';
-                                  btn.style.marginLeft = '8px';
-                                  btn.style.padding = '1px 4px';
-                                  btn.style.fontSize = '12px';
-                                  btn.title = 'Copy MAC Address';
-                                  btn.onclick = function() {
-                                      navigator.clipboard.writeText(macMatch[0]);
-                                      var oldBg = btn.style.backgroundColor;
-                                      btn.style.backgroundColor = '#4caf50';
-                                      setTimeout(function(){ btn.style.backgroundColor = oldBg; }, 1000);
-                                  };
-                                  macCell.appendChild(btn);
-                                  row.dataset.enhanced = "true";
-                              }
-                              var ipMatch = hostCell.innerText.match(/([0-9]{1,3}\.){3}[0-9]{1,3}/);
-                              if (ipMatch && !hostCell.querySelector('a')) {
-                                  var ip = ipMatch[0];
-                                  hostCell.innerHTML = hostCell.innerHTML.replace(ip, '<a href="http://' + ip + '" target="_blank" style="font-weight:bold; color:#0069d6; text-decoration:underline;">' + ip + '</a>');
-                                  row.dataset.enhanced = "true";
-                              }
-                          }
-                      });
+                  document.querySelectorAll('td, .td').forEach(function(cell) {
+                      if (cell.dataset.macDone) return;
+                      var text = cell.innerText || '';
+                      var macMatch = text.match(/([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})/);
+                      if (macMatch) {
+                          var mac = macMatch[0];
+                          var span = document.createElement('span');
+                          span.textContent = mac;
+                          span.style.cursor = 'pointer';
+                          span.style.borderBottom = '1px dashed #999';
+                          span.title = 'Click to copy MAC';
+                          span.onclick = function() {
+                              navigator.clipboard.writeText(mac);
+                              span.style.color = '#4caf50';
+                              span.style.fontWeight = 'bold';
+                              setTimeout(function(){ span.style.color = ''; span.style.fontWeight = ''; }, 1500);
+                          };
+                          cell.innerHTML = cell.innerHTML.replace(mac, span.outerHTML);
+                          cell.dataset.macDone = 'true';
+                      }
+                      var ipMatch = text.match(/\b([0-9]{1,3}\.){3}[0-9]{1,3}\b/);
+                      if (ipMatch && !cell.querySelector('a[href*="http"]')) {
+                          var ip = ipMatch[0];
+                          cell.innerHTML = cell.innerHTML.replace(ip, '<a href="http://' + ip + '" target="_blank" style="font-weight:bold; color:#0069d6; text-decoration:underline;">' + ip + '</a>');
+                      }
                   });
               }, 2000);
           });
@@ -478,6 +468,8 @@ jobs:
           CONFIG_PACKAGE_tcpdump-mini=y
           CONFIG_PACKAGE_ip-full=y
           CONFIG_PACKAGE_luci-theme-openwrt-2020=y
+          CONFIG_PACKAGE_ca-certificates=y
+          CONFIG_PACKAGE_ca-bundle=y
           CFGEOF
           make defconfig
 
