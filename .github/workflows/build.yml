@@ -52,6 +52,14 @@ jobs:
               content
           )
           
+          # Fix NAND flash partition size (from 32MB to 128MB)
+          content = re.sub(
+              r'(label\s*=\s*"rootfs";\s*reg\s*=\s*<.*?)0x[0]*2000000(.*?);', 
+              r'\g<1>0x08000000\g<2>;', 
+              content,
+              flags=re.DOTALL
+          )
+          
           # Change Model Name
           content = re.sub(
               r'model\s*=\s*".*";', 
@@ -85,7 +93,7 @@ jobs:
             printf '\tBLOCKSIZE := 128k\n'
             printf '\tPAGESIZE := 2048\n'
             printf '\tIMAGE_SIZE := 32768k\n'
-            printf '\tDEVICE_PACKAGES := kmod-ath10k-ct ath10k-firmware-qca4019-ct -kmod-ath10k -ath10k-firmware-qca4019\n'
+            printf '\tDEVICE_PACKAGES := kmod-ath10k-ct ath10k-firmware-qca4019-ct -kmod-ath10k -ath10k-firmware-qca4019 kmod-usb-core kmod-usb2 kmod-usb3 kmod-usb-storage kmod-usb-storage-extras block-mount kmod-fs-ext4 kmod-fs-vfat kmod-fs-exfat kmod-fs-ntfs e2fsprogs fdisk samba4-server luci-app-samba4 luci-app-commands\n'
             printf 'endef\n'
             printf 'TARGET_DEVICES += h1radio_ti04-708hp\n'
           } >> target/linux/ipq40xx/image/generic.mk
