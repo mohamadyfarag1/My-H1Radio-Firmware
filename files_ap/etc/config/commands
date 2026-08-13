@@ -1,0 +1,3 @@
+config command
+	option name 'Format USB & Expand Space (Extroot)'
+	option command '/usr/bin/auto-extroot.sh'
