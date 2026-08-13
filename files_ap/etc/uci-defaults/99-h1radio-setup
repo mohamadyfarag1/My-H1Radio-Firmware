@@ -161,4 +161,23 @@ uci set commands.extroot.name='Format USB & Expand Space (Extroot)'
 uci set commands.extroot.command='/usr/bin/auto-extroot.sh'
 uci commit commands
 
+# 13. Dynamic MAC Address Assignment
+BASE_MAC=$(cat /sys/class/net/eth0/address 2>/dev/null)
+if [ -n "$BASE_MAC" ]; then
+    prefix=$(echo "$BASE_MAC" | cut -d: -f1-5)
+    last_byte=$(echo "$BASE_MAC" | cut -d: -f6)
+    
+    wan_hex=$(printf "%02x" $(((0x$last_byte + 1) % 256)))
+    WAN_MAC="${prefix}:${wan_hex}"
+    
+    wlan5_hex=$(printf "%02x" $(((0x$last_byte + 2) % 256)))
+    WLAN5_MAC="${prefix}:${wlan5_hex}"
+    
+    uci set network.wan.macaddr="$WAN_MAC"
+    uci commit network
+    
+    uci set wireless.radio1.macaddr="$WLAN5_MAC"
+    uci commit wireless
+fi
+
 exit 0
