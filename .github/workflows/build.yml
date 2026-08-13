@@ -52,13 +52,15 @@ jobs:
               content
           )
           
-          # Fix NAND flash partition size (from 32MB to 128MB)
-          content = re.sub(
-              r'(label\s*=\s*"rootfs";\s*reg\s*=\s*<.*?)0x[0]*2000000(.*?);', 
-              r'\g<1>0x08000000\g<2>;', 
-              content,
-              flags=re.DOTALL
-          )
+          # Fix NAND flash partition size (from 32MB to 128MB) safely
+          def patch_rootfs(match):
+              block = match.group(0)
+              block = re.sub(r'0x0*2000000', '0x08000000', block)
+              block = re.sub(r'33554432', '134217728', block)
+              return block
+              
+          content = re.sub(r'(partition@[0-9a-fA-F]+\s*\{[^}]*label\s*=\s*"rootfs";[^}]*\})', patch_rootfs, content, flags=re.DOTALL)
+
           
           # Change Model Name
           content = re.sub(
